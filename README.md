@@ -1,0 +1,207 @@
+# Enterprise GenAI Governance Platform
+
+**Compliance-first governance layer for deploying generative AI in regulated financial services.**
+
+Built for a small community credit union that wanted to use GenAI in their member service center and loan processing workflow but had no framework for doing it safely. The NCUA examiner had asked about their AI plans during the last exam cycle. The compliance officer had no answers. The board had approved a digital transformation budget. What they didn't have was anyone who knew how to deploy AI in a way that wouldn't create regulatory exposure.
+
+---
+
+## The Problem
+
+The credit union's member service center handles thousands of calls per month -- balance inquiries, transaction disputes, loan questions, account changes. The call center runs a small team of reps with a supervisor. Turnover is high. Training a new rep takes weeks before they can handle calls independently.
+
+The VP of Operations had seen demos of GenAI-powered call center tools. The pitch was compelling: draft responses for reps, summarize member accounts before calls, auto-classify incoming requests. She brought it to the CIO, who brought it to the board. The board approved a digital transformation budget for the year.
+
+Here's where it stalled:
+
+**The compliance officer raised her hand.** She'd been reading NCUA letters and FFIEC guidance. While there was no specific GenAI regulation yet, existing model risk management expectations (based on OCC SR 11-7, which NCUA follows informally) clearly applied. Any AI system that touches member interactions or lending decisions needs documentation, validation, and monitoring.
+
+The credit union had none of that infrastructure:
+
+- **No prompt management.** The CIO's plan was to have a developer write prompts in the application code. No versioning, no review, no approval process. If a prompt change caused the model to give bad advice to a member, there would be no record of what changed or when.
+
+- **No output screening.** The GenAI tool drafts a response, the rep sends it. If the model hallucinated an interest rate or surfaced a member's SSN, nobody would catch it before it went out.
+
+- **No bias testing.** Fair lending applies to any system that interacts with members, even if it's just drafting responses. The credit union couldn't demonstrate equitable treatment because they weren't measuring it.
+
+- **No audit trail.** NCUA examiners can request records of AI-assisted interactions. The credit union had no logging. If asked "show me every AI-generated response sent to members this quarter," the answer was "we can't."
+
+- **No model documentation.** The FFIEC's guidance on model risk management requires banks and credit unions to document what models they use, how they're validated, and how they're monitored. The compliance officer had no template for documenting an LLM.
+
+The compliance officer's position: "I support this initiative, but I need to be able to answer the examiner's questions. Right now I can't."
+
+The board's position: "We approved the budget. Why isn't this live yet?"
+
+---
+
+## What We Built
+
+A governance layer that sits between the credit union's applications and the LLM provider. Every prompt, every response, every model interaction passes through this layer. It handles four things:
+
+1. **Prompt management** -- versioned, approved, auditable prompt templates
+2. **Output guardrails** -- real-time checks on every LLM response before the rep sees it
+3. **Model evaluation** -- systematic testing across compliance-relevant dimensions
+4. **Compliance logging** -- complete audit trail for examiner readiness
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Applications (Member Service Tool, Loan Processing)  │
+└──────────────────────────┬───────────────────────────┘
+                           │
+                    ┌──────▼──────┐
+                    │   Prompt    │  Versioned templates, variable injection,
+                    │  Registry   │  approval workflow
+                    └──────┬──────┘
+                           │
+                    ┌──────▼──────┐
+                    │   Output    │  PII detection, hallucination checks,
+                    │  Guardrails │  bias screening, compliance filtering
+                    └──────┬──────┘
+                           │
+                    ┌──────▼──────┐
+                    │ Compliance  │  Full audit trail, examiner-ready
+                    │   Logger    │  exports, retention management
+                    └──────┬──────┘
+                           │
+                    ┌──────▼──────┐
+                    │   Model     │  Evaluation suites, bias measurement,
+                    │  Evaluator  │  model cards for MRM documentation
+                    └─────────────┘
+```
+
+### How It Works
+
+**A member calls about a charge on their account. Here's what happens:**
+
+1. The rep pulls up the member's account. The service tool prepares context: account type, recent transactions, membership tenure, open cases.
+
+2. The **Prompt Registry** selects the approved prompt template ("member_service_response_v2.1"), injects the context variables, and logs the complete prompt.
+
+3. The prompt goes to the LLM provider (the credit union uses AWS Bedrock).
+
+4. The response comes back. Before the rep sees it, **Output Guardrails** run 5 checks:
+   - **PII scan:** Does the response contain SSNs, account numbers, or member data that shouldn't be surfaced?
+   - **Hallucination check:** Does the response reference rates, balances, or fees not in the input context?
+   - **Bias screen:** Does the response contain language that could be discriminatory?
+   - **Compliance filter:** Does the response make unauthorized claims or guarantees?
+   - **Confidence assessment:** Is this a coherent, useful draft or garbage?
+
+5. If checks pass, the draft appears in the rep's interface with a note: "AI-drafted -- review before sending." If any check fails, the draft is blocked and the rep writes their own response.
+
+6. The **Compliance Logger** records everything: input, prompt template, model, raw output, guardrail results, whether the rep sent it as-is, edited it, or discarded it.
+
+7. Monthly, the **Model Evaluator** runs test suites across both use cases. Results feed into the model risk documentation the compliance officer maintains.
+
+---
+
+## Modules
+
+| File | Purpose |
+|---|---|
+| `prompt_registry.py` | Versioned prompt template management. Approval workflows, variable injection, A/B testing support. |
+| `output_guardrails.py` | Real-time output screening. PII detection, hallucination detection, bias screening, compliance filtering. |
+| `model_evaluator.py` | Systematic model testing. Evaluation suites, bias measurement, drift detection. Generates model risk documentation. |
+| `compliance_logger.py` | Complete audit trail. Immutable interaction logs, examiner-ready exports, retention management. |
+| `dashboard.jsx` | Governance dashboard. Guardrail metrics, model health, compliance status, evaluation trends. |
+| `FUTURE_ENHANCEMENTS.md` | Enhancements scoped but not built. |
+
+---
+
+## Client Context
+
+**Credit union profile:**
+- Small community credit union, NCUA-insured
+- Small IT department: CIO, a couple of developers, infrastructure and helpdesk staff
+- No data science team. No AI experience prior to this engagement.
+- Core banking: Symitar (Jack Henry). Call center: Genesys Cloud.
+- Compliance team: 1 compliance officer handling multiple functions (also covers BSA, vendor management)
+
+**Regulatory situation:**
+- NCUA is their primary regulator
+- NCUA hasn't issued formal GenAI-specific guidance but has informally indicated that FFIEC model risk management principles apply
+- Examiner specifically asked "what's your plan for AI governance?" during the prior exam cycle
+- The compliance officer had no answer beyond "we're working on it"
+- No consent orders or enforcement actions, but the examiner's question made it clear this was on their radar
+
+**GenAI use cases:**
+
+1. **Member service copilot** -- draft responses for call center reps. Rep reviews and edits before sending. Covers balance inquiries, transaction disputes, product questions, and general service requests. Target: reduce average handle time by 20-25%.
+
+2. **Loan document summarizer** -- extract key terms, conditions, and data points from loan applications and supporting documents. Used by loan processors, not member-facing.
+
+**Before this platform:**
+- 2 GenAI use cases prototyped by a developer using OpenAI's API directly
+- Neither could go to production because the compliance officer couldn't document the risk controls
+- No prompt versioning -- prompts were hardcoded strings in a Python script
+- No output monitoring of any kind
+- No audit trail
+- No way to answer the NCUA examiner's questions about AI governance
+- Months of development work stuck behind compliance sign-off
+- Board getting impatient about the digital transformation budget sitting unspent
+
+**After deployment (first quarter in production):**
+- 2 use cases deployed to production (compliance officer signed off)
+- 43,000+ LLM interactions processed through the governance layer
+- 2.6% of outputs blocked by guardrails before reaching the rep
+- 0.5% of member service outputs contained PII that would have been surfaced without screening
+- Average handle time dropped from 7.2 to 5.8 minutes (on track for target)
+- Loan document review time reduced by ~35%
+- 0 findings related to AI in the next NCUA exam
+- Examiner noted the governance framework positively in the exam report
+- Compliance officer can now produce examiner-ready documentation in under an hour
+- Model risk documentation passed internal audit review
+
+---
+
+## How Governance Actually Works in Practice
+
+**The prompt change that almost went wrong:**
+
+Week 2 of production. The developer wants to improve response quality for balance inquiries. He updates the system prompt: "When the member asks about their balance, provide the exact current balance and recent transactions." Sounds reasonable. Problem: the context injected into the prompt only includes the last 5 transactions. The model would fill in "recent transactions" by hallucinating plausible-looking entries that don't exist.
+
+Without the prompt registry, that change goes straight to production. The developer pushes code, reps start getting responses with fake transaction details, a member notices their statement doesn't match, calls back angry, and the supervisor escalates. With the registry, the change triggers a review. The compliance officer runs it through the evaluation suite and catches the hallucination risk in testing. The developer revises the prompt: "Reference only the transactions listed in the context below." Fixed before it was ever a problem.
+
+**The bias finding that nobody expected:**
+
+Month 2. The model evaluator runs monthly bias testing on the member service copilot. The test set uses the same inquiry with different member profiles. The evaluator detects that responses to members with accounts under $5,000 are shorter and less detailed than responses to members with accounts over $50,000. The model was providing better service to wealthier members.
+
+Not discriminatory in a legal sense (account balance isn't a protected class), but it violated the credit union's core principle of equal member service. The cooperative charter means every member gets the same quality of service regardless of their balance. The team adjusted the system prompt to explicitly instruct consistent response quality regardless of account size, and re-tested until the disparity dropped below threshold.
+
+The compliance officer included this finding and remediation in the model risk documentation. The examiner later noted it as an example of effective model monitoring.
+
+**The exam that proved the system worked:**
+
+NCUA exam, first cycle after deployment. The examiner asks three questions about AI:
+1. "What AI models are you using in member-facing applications?"
+2. "How do you validate and monitor these models?"
+3. "Can you show me records of AI-assisted member interactions?"
+
+The compliance logger produces all three answers in under an hour. Model cards for both use cases with validation results. Interaction logs with guardrail outcomes. Prompt version history with the approval chain. The compliance officer walks the examiner through the governance dashboard live.
+
+The examiner's feedback: "This is ahead of where most institutions your size are. Keep documenting."
+
+A year ago, the same examiner's question got a blank stare. Now it gets a live dashboard.
+
+---
+
+## Technical Notes
+
+- Python 3.11+, React with Recharts
+- Designed for AWS deployment (Bedrock for LLM access, S3 for log storage)
+- No direct LLM dependencies -- the governance layer is model-agnostic
+- Guardrail checks use regex, pattern matching, and statistical methods (not additional LLM calls)
+- PII detection uses regex patterns for financial services PII (SSN, account numbers, routing numbers, DOB)
+- Compliance logger uses append-only storage pattern for audit integrity
+- In production, logs stored in S3 with Object Lock for retention compliance
+- All modules include synthetic data for portfolio demonstration
+
+---
+
+## What This Demonstrates
+
+- **Building for the actual buyer, not the ideal buyer.** A small credit union doesn't have an MRM team or a Chief AI Officer. They have a compliance officer who's also handling BSA, vendor management, and four other things. The governance platform had to be simple enough for her to operate without a data science degree.
+- **Translating regulatory ambiguity into product requirements.** NCUA hasn't published formal GenAI rules. The FFIEC guidance is principles-based, not prescriptive. The work was interpreting "institutions should have appropriate risk management processes" into specific, implementable controls that a compliance officer could defend to an examiner.
+- **Right-sizing governance for the institution.** A community credit union doesn't need the same governance framework as JPMorgan. The guardrails are the same in principle but the implementation, reporting, and operational model are scaled to a team where one person wears three hats.
+- **Unblocking a stalled initiative.** Months of development work was stuck behind a compliance sign-off that couldn't happen because the infrastructure didn't exist. The governance platform wasn't a separate project -- it was the prerequisite for the project the board actually approved.
