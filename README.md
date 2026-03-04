@@ -303,9 +303,43 @@ A year ago, the same examiner's question got a blank stare. Now it gets a live d
 
 ---
 
-## What This Demonstrates
+## PM Perspective
 
-- **Building for the actual buyer, not the ideal buyer.** A small credit union doesn't have an MRM team or a Chief AI Officer. They have a compliance officer who's also handling BSA, vendor management, and four other things. The governance platform had to be simple enough for her to operate without a data science degree.
-- **Translating regulatory ambiguity into product requirements.** NCUA hasn't published formal GenAI rules. The FFIEC guidance is principles-based, not prescriptive. The work was interpreting "institutions should have appropriate risk management processes" into specific, implementable controls that a compliance officer could defend to an examiner.
-- **Right-sizing governance for the institution.** A community credit union doesn't need the same governance framework as JPMorgan. The guardrails are the same in principle but the implementation, reporting, and operational model are scaled to a team where one person wears three hats.
-- **Unblocking a stalled initiative.** Months of development work was stuck behind a compliance sign-off that couldn't happen because the infrastructure didn't exist. The governance platform wasn't a separate project -- it was the prerequisite for the project the board actually approved.
+Hardest decision: Rule-based guardrails vs. LLM-as-a-judge for output screening. LLM-based screening would catch more edge cases, but the compliance officer was adamant: "I need to explain every blocked output to the examiner." Rule-based screening with explicit pattern matching (PII regex, prohibited term lists, confidence thresholds) was explainable. We compromised — rule-based for PII/compliance screening (deterministic, auditable), with a Claude Haiku classifier as a secondary check for hallucination and bias that flagged for human review rather than auto-blocking.
+
+Surprise: The credit union's IT team was terrified of AI, not excited. They'd seen the headlines about ChatGPT hallucinations and expected regulators to penalize them. The breakthrough was building the "Model Card" documentation system — a standardized template showing exactly what each AI feature does, what data it accesses, and what guardrails protect it. The compliance officer took those model cards into the NCUA exam and the examiner called them "best practice." That single deliverable sold the entire engagement.
+
+Do differently: Would have started with the audit trail before the guardrails. We built the screening pipeline first, then the logging system. But the compliance officer's #1 question from week one was "can you prove what the AI said to our members?" Starting with comprehensive audit logging would have given them confidence earlier and reduced the resistance we faced in the first month.
+
+---
+
+## Business Context
+
+**Market:** 4,700+ credit unions in the US (NCUA), with ~2,800 between $100M-$10B in assets actively evaluating AI tools for member services. Compliance-first AI governance is a prerequisite for adoption in regulated financial services.
+
+**Unit Economics:**
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Annual compliance cost | $85,000/year | Automated governance |
+| Compliance review time | 120+ hours | Continuous monitoring |
+| Annual savings | — | $60,000 |
+| Risk avoided | — | $250K+ exam findings |
+| Platform cost (build) | — | $130,000 |
+| Platform cost (monthly) | — | $650 |
+| Payback period | — | 8 months |
+| 3-year ROI | — | 5x |
+
+**Pricing:** If productized for credit unions and community banks, $1,500-3,000/month based on asset size and AI use case count, targeting $5-8M ARR at 300 institutions.
+
+---
+
+## About This Project
+
+This was built for a small community credit union (NCUA-regulated, ~200K members) that needed a governance framework before expanding AI-assisted member services.
+
+**Role & Leadership:**
+- Led discovery with compliance officers, member services leads, and IT to map AI use cases and regulatory requirements
+- Designed the prompt management and output screening architecture ensuring NCUA/FFIEC compliance
+- Made technology decisions on guardrail approach (rule-based screening vs. LLM-based classification)
+- Established metrics framework for guardrail effectiveness, handle time impact, and examination readiness
