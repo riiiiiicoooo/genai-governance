@@ -1,0 +1,270 @@
+{
+  "name": "Daily Compliance Digest",
+  "description": "Scheduled daily at 8 AM: Query yesterday's interactions from Supabase, aggregate metrics, and send digest email to compliance officer",
+  "nodes": [
+    {
+      "parameters": {
+        "trigger": "every",
+        "unit": "day",
+        "value": 1,
+        "triggerAtHour": 8,
+        "triggerAtMinute": 0
+      },
+      "id": "schedule_trigger",
+      "name": "Schedule Trigger (8 AM Daily)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [50, 100]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{ $env.SUPABASE_URL }}/rest/v1/interaction_logs?created_at=gte.{{ $yesterday.format('YYYY-MM-DD') }}T00:00:00Z&created_at=lt.{{ $today.format('YYYY-MM-DD') }}T00:00:00Z&select=*",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}",
+          "Accept": "application/json"
+        }
+      },
+      "id": "query_yesterday_interactions",
+      "name": "Query Yesterday's Interactions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [250, 100]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{ $env.SUPABASE_URL }}/rest/v1/compliance_events?created_at=gte.{{ $yesterday.format('YYYY-MM-DD') }}T00:00:00Z&created_at=lt.{{ $today.format('YYYY-MM-DD') }}T00:00:00Z&select=*",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}",
+          "Accept": "application/json"
+        }
+      },
+      "id": "query_yesterday_events",
+      "name": "Query Yesterday's Compliance Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [250, 250]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{ $env.SUPABASE_URL }}/rest/v1/dashboard_metrics?metric_date=eq.{{ $yesterday.format('YYYY-MM-DD') }}&select=*",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}",
+          "Accept": "application/json"
+        }
+      },
+      "id": "query_metrics",
+      "name": "Query Dashboard Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [250, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "{{ $env.SUPABASE_URL }}/rest/v1/dashboard_metrics?metric_date=eq.{{ $dayBefore.format('YYYY-MM-DD') }}&select=*",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}",
+          "Accept": "application/json"
+        }
+      },
+      "id": "query_prior_period",
+      "name": "Query Prior Period Metrics (Day Before)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [250, 550]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Aggregate yesterday's metrics\nconst interactions = $node.query_yesterday_interactions.json;\nconst events = $node.query_yesterday_events.json;\nconst todayMetrics = $node.query_metrics.json[0] || {};\nconst priorMetrics = $node.query_prior_period.json[0] || {};\n\nconst totalInteractions = interactions.length;\nconst blockedCount = interactions.filter(i => i.guardrail_decision === 'block').length;\nconst warnedCount = interactions.filter(i => i.guardrail_decision === 'warn').length;\nconst deliveredCount = interactions.filter(i => i.guardrail_decision === 'deliver').length;\n\nconst piiCaught = interactions.filter(i => \n  i.guardrail_results?.pii_detection?.found_pii\n).length;\n\nconst avgLatency = interactions.length > 0\n  ? Math.round(\n      interactions.reduce((sum, i) => sum + (i.metadata?.latency_ms || 0), 0) / \n      interactions.length\n    )\n  : 0;\n\nconst totalCost = interactions.reduce((sum, i) => sum + (i.cost_usd || 0), 0).toFixed(2);\n\nconst blockRate = totalInteractions > 0\n  ? ((blockedCount / totalInteractions) * 100).toFixed(2)\n  : 0;\n\n// Calculate trends\nconst priorTotal = priorMetrics.total_interactions || 0;\nconst interactionsTrend = totalInteractions > priorTotal ? 'up' : 'down';\nconst interactionTrendPercent = priorTotal > 0\n  ? (((totalInteractions - priorTotal) / priorTotal) * 100).toFixed(1)\n  : 0;\n\nconst priorBlockRate = priorMetrics.block_rate || 0;\nconst blockTrend = blockRate > priorBlockRate ? 'up' : 'down';\nconst blockTrendDiff = (blockRate - priorBlockRate).toFixed(2);\n\n// Find unresolved critical events\nconst unresolvedCritical = events.filter(e => \n  e.severity === 'critical' && !e.resolved\n);\n\nconst unresolvedWarnings = events.filter(e => \n  e.severity === 'warning' && !e.resolved\n);\n\nreturn {\n  date: $yesterday.format('YYYY-MM-DD'),\n  summary: {\n    totalInteractions,\n    deliveredCount,\n    blockedCount,\n    warnedCount,\n    blockRate,\n    piiCaught,\n    avgLatencyMs: avgLatency,\n    totalCostUSD: totalCost\n  },\n  trends: {\n    interactions: {\n      direction: interactionsTrend,\n      changePercent: interactionTrendPercent\n    },\n    blockRate: {\n      direction: blockTrend,\n      changeDiff: blockTrendDiff\n    }\n  },\n  events: {\n    total: events.length,\n    unresolvedCritical: unresolvedCritical.length,\n    unresolvedWarnings: unresolvedWarnings.length\n  },\n  requiresAttention: unresolvedCritical.length > 0 || unresolvedWarnings.length > 0\n};"
+      },
+      "id": "aggregate_metrics",
+      "name": "Aggregate Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 250]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Generate HTML email content\nconst data = $node.aggregate_metrics.json;\nconst yesterday = $yesterday.format('MMMM DD, YYYY');\n\nlet html = `\n<html>\n  <head>\n    <style>\n      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #333; }\n      .container { max-width: 600px; margin: 0 auto; padding: 20px; }\n      .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }\n      .section { background: #f5f5f5; padding: 15px; margin: 10px 0; border-left: 4px solid #667eea; }\n      .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }\n      .metric { background: white; padding: 10px; border-radius: 4px; border: 1px solid #e0e0e0; }\n      .metric-value { font-size: 24px; font-weight: bold; color: #667eea; }\n      .metric-label { font-size: 12px; color: #666; margin-top: 5px; }\n      .trend-up { color: #ff6b6b; }\n      .trend-down { color: #51cf66; }\n      .alert { background: #fff3cd; border-left-color: #ffc107; padding: 15px; border-radius: 4px; margin: 10px 0; }\n      .critical { background: #f8d7da; border-left-color: #dc3545; color: #721c24; }\n      .footer { color: #999; font-size: 12px; text-align: center; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0; }\n      a { color: #667eea; text-decoration: none; }\n    </style>\n  </head>\n  <body>\n    <div class=\"container\">\n      <div class=\"header\">\n        <h1>Daily Compliance Digest</h1>\n        <p>${yesterday}</p>\n      </div>\n      \n      <div class=\"section\">\n        <h3>Interaction Summary</h3>\n        <div class=\"metrics\">\n          <div class=\"metric\">\n            <div class=\"metric-value\">${data.summary.totalInteractions}</div>\n            <div class=\"metric-label\">Total Interactions</div>\n          </div>\n          <div class=\"metric\">\n            <div class=\"metric-value\" style=\"color: #51cf66;\">${data.summary.deliveredCount}</div>\n            <div class=\"metric-label\">Delivered</div>\n          </div>\n          <div class=\"metric\">\n            <div class=\"metric-value\" style=\"color: #ffc107;\">${data.summary.warnedCount}</div>\n            <div class=\"metric-label\">Warned</div>\n          </div>\n          <div class=\"metric\">\n            <div class=\"metric-value\" style=\"color: #dc3545;\">${data.summary.blockedCount}</div>\n            <div class=\"metric-label\">Blocked</div>\n          </div>\n        </div>\n      </div>\n      \n      <div class=\"section\">\n        <h3>Key Metrics</h3>\n        <div class=\"metrics\">\n          <div class=\"metric\">\n            <div class=\"metric-value\">${data.summary.blockRate}%</div>\n            <div class=\"metric-label\">Block Rate ${data.trends.blockRate.direction === 'up' ? '<span class=\"trend-up\">↑ ' + data.trends.blockRate.changeDiff + '%</span>' : '<span class=\"trend-down\">↓ ' + Math.abs(data.trends.blockRate.changeDiff) + '%</span>'}</div>\n          </div>\n          <div class=\"metric\">\n            <div class=\"metric-value\">${data.summary.piiCaught}</div>\n            <div class=\"metric-label\">PII Instances Caught</div>\n          </div>\n          <div class=\"metric\">\n            <div class=\"metric-value\">${data.summary.avgLatencyMs}ms</div>\n            <div class=\"metric-label\">Avg Guardrail Latency</div>\n          </div>\n          <div class=\"metric\">\n            <div class=\"metric-value\">$${data.summary.totalCostUSD}</div>\n            <div class=\"metric-label\">Total Cost (LLM)</div>\n          </div>\n        </div>\n      </div>\n      \n      <div class=\"section\">\n        <h3>Trends vs. Prior Period</h3>\n        <p>Interactions: ${data.trends.interactions.direction === 'up' ? '<span class=\"trend-up\">↑ ' + data.trends.interactions.changePercent + '%</span>' : '<span class=\"trend-down\">↓ ' + Math.abs(data.trends.interactions.changePercent) + '%</span>'}</p>\n      </div>\n`;\n\nif (data.events.unresolvedCritical > 0) {\n  html += `\n      <div class=\"section alert critical\">\n        <strong>⚠️ Attention Required</strong><br>\n        ${data.events.unresolvedCritical} unresolved critical event(s) require immediate review.\n      </div>\n  `;\n}\n\nif (data.events.unresolvedWarnings > 0) {\n  html += `\n      <div class=\"section alert\">\n        <strong>📋 Open Items</strong><br>\n        ${data.events.unresolvedWarnings} unresolved warning(s) in queue.\n      </div>\n  `;\n}\n\nhtml += `\n      <div class=\"section\" style=\"text-align: center;\">\n        <a href=\"https://genai-governance.example.com/dashboard\" style=\"background: #667eea; color: white; padding: 10px 20px; border-radius: 4px; display: inline-block;\">View Full Dashboard</a>\n      </div>\n      \n      <div class=\"footer\">\n        <p>This is an automated report from the GenAI Governance Platform</p>\n      </div>\n    </div>\n  </body>\n</html>\n`;\n\nreturn { html };"
+      },
+      "id": "generate_email_html",
+      "name": "Generate Email HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 250]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.RESEND_API_URL }}/emails",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer {{ $env.RESEND_API_KEY }}"
+        },
+        "body": {
+          "from": "governance@genai-governance.example.com",
+          "to": "{{ $env.COMPLIANCE_DIGEST_EMAIL }}",
+          "subject": "Daily Compliance Digest - {{ $yesterday.format('MMMM DD, YYYY') }}",
+          "html": "{{ $node.generate_email_html.json.html }}"
+        }
+      },
+      "id": "send_digest_email",
+      "name": "Send Digest Email (Resend)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 250]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.SUPABASE_URL }}/rest/v1/audit_reports",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}",
+          "Prefer": "return=minimal"
+        },
+        "body": {
+          "report_type": "daily_digest",
+          "period_start": "{{ $yesterday.format('YYYY-MM-DD') }}T00:00:00Z",
+          "period_end": "{{ $yesterday.format('YYYY-MM-DD') }}T23:59:59Z",
+          "total_interactions": "{{ $node.aggregate_metrics.json.summary.totalInteractions }}",
+          "interactions_blocked": "{{ $node.aggregate_metrics.json.summary.blockedCount }}",
+          "block_rate": "{{ $node.aggregate_metrics.json.summary.blockRate }}",
+          "pii_instances_caught": "{{ $node.aggregate_metrics.json.summary.piiCaught }}",
+          "average_guardrail_latency_ms": "{{ $node.aggregate_metrics.json.summary.avgLatencyMs }}",
+          "metrics": "{{ $node.aggregate_metrics.json }}",
+          "findings": {}
+        }
+      },
+      "id": "store_report",
+      "name": "Store Report in Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 400]
+    }
+  ],
+  "connections": {
+    "schedule_trigger": {
+      "main": [
+        [
+          {
+            "node": "query_yesterday_interactions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "query_yesterday_events",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "query_metrics",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "query_prior_period",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "query_yesterday_interactions": {
+      "main": [
+        [
+          {
+            "node": "aggregate_metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "query_yesterday_events": {
+      "main": [
+        [
+          {
+            "node": "aggregate_metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "query_metrics": {
+      "main": [
+        [
+          {
+            "node": "aggregate_metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "query_prior_period": {
+      "main": [
+        [
+          {
+            "node": "aggregate_metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "aggregate_metrics": {
+      "main": [
+        [
+          {
+            "node": "generate_email_html",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "generate_email_html": {
+      "main": [
+        [
+          {
+            "node": "send_digest_email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "store_report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send_digest_email": {
+      "main": [
+        []
+      ]
+    },
+    "store_report": {
+      "main": [
+        []
+      ]
+    }
+  }
+}

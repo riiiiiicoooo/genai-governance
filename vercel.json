@@ -1,0 +1,173 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "framework": "other",
+  "public": true,
+  "env": [
+    {
+      "key": "ENVIRONMENT",
+      "description": "Deployment environment: development, staging, or production",
+      "value": "production",
+      "type": "string"
+    },
+    {
+      "key": "SUPABASE_URL",
+      "description": "Supabase project URL",
+      "type": "string"
+    },
+    {
+      "key": "SUPABASE_SERVICE_ROLE_KEY",
+      "description": "Supabase service role key (keep secret!)",
+      "type": "secret"
+    },
+    {
+      "key": "LANGSMITH_API_KEY",
+      "description": "LangSmith API key for observability",
+      "type": "secret"
+    },
+    {
+      "key": "LANGSMITH_PROJECT",
+      "description": "LangSmith project name",
+      "value": "genai-governance",
+      "type": "string"
+    },
+    {
+      "key": "AWS_REGION",
+      "description": "AWS region for Bedrock",
+      "value": "us-east-1",
+      "type": "string"
+    },
+    {
+      "key": "AWS_ACCESS_KEY_ID",
+      "description": "AWS access key",
+      "type": "secret"
+    },
+    {
+      "key": "AWS_SECRET_ACCESS_KEY",
+      "description": "AWS secret key",
+      "type": "secret"
+    },
+    {
+      "key": "BEDROCK_MODEL_ID",
+      "description": "AWS Bedrock model ID",
+      "value": "anthropic.claude-3-sonnet-20240229-v1:0",
+      "type": "string"
+    },
+    {
+      "key": "N8N_HOST",
+      "description": "n8n instance URL",
+      "type": "string"
+    },
+    {
+      "key": "N8N_API_KEY",
+      "description": "n8n API key",
+      "type": "secret"
+    },
+    {
+      "key": "PAGERDUTY_API_KEY",
+      "description": "PagerDuty API key",
+      "type": "secret"
+    },
+    {
+      "key": "SLACK_BOT_TOKEN",
+      "description": "Slack bot token",
+      "type": "secret"
+    },
+    {
+      "key": "SLACK_WEBHOOK_URL",
+      "description": "Slack webhook URL for notifications",
+      "type": "secret"
+    },
+    {
+      "key": "RESEND_API_KEY",
+      "description": "Resend API key for email",
+      "type": "secret"
+    },
+    {
+      "key": "COMPLIANCE_ALERT_EMAIL",
+      "description": "Email for critical compliance alerts",
+      "type": "string"
+    },
+    {
+      "key": "COMPLIANCE_DIGEST_EMAIL",
+      "description": "Email for daily digest",
+      "type": "string"
+    },
+    {
+      "key": "TRIGGER_API_KEY",
+      "description": "Trigger.dev API key",
+      "type": "secret"
+    },
+    {
+      "key": "TRIGGER_PROJECT_ID",
+      "description": "Trigger.dev project ID",
+      "type": "string"
+    },
+    {
+      "key": "API_PORT",
+      "description": "API port",
+      "value": "5000",
+      "type": "string"
+    },
+    {
+      "key": "LOG_LEVEL",
+      "description": "Logging level: DEBUG, INFO, WARNING, ERROR",
+      "value": "INFO",
+      "type": "string"
+    }
+  ],
+  "builds": [
+    {
+      "src": "api/app.py",
+      "use": "@vercel/python",
+      "config": { "maxLambdaSize": "15mb" }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "api/app.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/dashboard/dashboard.jsx"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/scheduled/daily-digest",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/scheduled/model-evaluation",
+      "schedule": "0 2 1 * *"
+    }
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "develop": true
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,338 @@
+{
+  "name": "Compliance Event Router",
+  "description": "Routes compliance events from Supabase based on severity: CRITICAL → PagerDuty + Slack + Email, WARNING → daily digest queue, INFO → logging only",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook_trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhookTrigger",
+      "typeVersion": 1,
+      "position": [50, 200],
+      "webhookId": "compliance-events-webhook",
+      "webhookUrl": "{{$env.N8N_WEBHOOK_BASE_URL}}/webhook/compliance-events"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "key": "body.record.severity",
+              "condition": "equal",
+              "value": "critical"
+            }
+          ]
+        }
+      },
+      "id": "is_critical_event",
+      "name": "Is Critical Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [250, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "key": "body.record.severity",
+              "condition": "equal",
+              "value": "warning"
+            }
+          ]
+        }
+      },
+      "id": "is_warning_event",
+      "name": "Is Warning Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [250, 450]
+    },
+    {
+      "parameters": {
+        "authentication": "typeByUrl",
+        "method": "POST",
+        "url": "https://events.pagerduty.com/v2/enqueue",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "routing_key": "{{ $env.PAGERDUTY_API_KEY }}",
+          "event_action": "trigger",
+          "dedup_key": "{{ $node.webhook_trigger.json.body.record.id }}",
+          "payload": {
+            "summary": "🚨 CRITICAL Compliance Event: {{ $node.webhook_trigger.json.body.record.title }}",
+            "severity": "critical",
+            "source": "GenAI Governance Platform",
+            "custom_details": {
+              "event_type": "{{ $node.webhook_trigger.json.body.record.event_type }}",
+              "description": "{{ $node.webhook_trigger.json.body.record.description }}",
+              "details": "{{ $node.webhook_trigger.json.body.record.details }}",
+              "interaction_log_id": "{{ $node.webhook_trigger.json.body.record.interaction_log_id }}",
+              "dashboard_url": "https://genai-governance.example.com/events/{{ $node.webhook_trigger.json.body.record.id }}"
+            }
+          }
+        }
+      },
+      "id": "send_to_pagerduty",
+      "name": "Send to PagerDuty",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 50]
+    },
+    {
+      "parameters": {
+        "chatId": "{{ $env.SLACK_CHANNEL_CRITICAL }}",
+        "text": "<!here> 🚨 **CRITICAL Compliance Event**\n\n*{{ $node.webhook_trigger.json.body.record.title }}*\n\nType: `{{ $node.webhook_trigger.json.body.record.event_type }}`\nDescription: {{ $node.webhook_trigger.json.body.record.description }}\n\n<https://genai-governance.example.com/events/{{ $node.webhook_trigger.json.body.record.id }}|View Details>",
+        "blocks": [
+          {
+            "type": "header",
+            "text": {
+              "type": "plain_text",
+              "text": "🚨 CRITICAL Compliance Event"
+            }
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "*{{ $node.webhook_trigger.json.body.record.title }}*\n\nType: `{{ $node.webhook_trigger.json.body.record.event_type }}`"
+            }
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "{{ $node.webhook_trigger.json.body.record.description }}"
+            }
+          },
+          {
+            "type": "actions",
+            "elements": [
+              {
+                "type": "button",
+                "text": {
+                  "type": "plain_text",
+                  "text": "View in Dashboard"
+                },
+                "url": "https://genai-governance.example.com/events/{{ $node.webhook_trigger.json.body.record.id }}"
+              }
+            ]
+          }
+        ]
+      },
+      "id": "send_to_slack",
+      "name": "Send to Slack (Critical)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.0,
+      "position": [450, 150]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.RESEND_API_URL }}/emails",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "from": "compliance@genai-governance.example.com",
+          "to": "{{ $env.COMPLIANCE_ALERT_EMAIL }}",
+          "subject": "🚨 CRITICAL Compliance Event: {{ $node.webhook_trigger.json.body.record.title }}",
+          "html": "<h1>Critical Compliance Event</h1><p><strong>{{ $node.webhook_trigger.json.body.record.title }}</strong></p><p>Type: {{ $node.webhook_trigger.json.body.record.event_type }}</p><p>{{ $node.webhook_trigger.json.body.record.description }}</p><p><a href=\"https://genai-governance.example.com/events/{{ $node.webhook_trigger.json.body.record.id }}\">View Details</a></p>"
+        }
+      },
+      "id": "send_critical_email",
+      "name": "Send Critical Email (Resend)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 250]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "{{ $env.SUPABASE_URL }}/rest/v1/compliance_events?id=eq.{{ $node.webhook_trigger.json.body.record.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}",
+          "Prefer": "return=minimal"
+        },
+        "body": {
+          "notified_pagerduty": true,
+          "notified_slack": true,
+          "notified_email": true,
+          "updated_at": "{{ now.toISO() }}"
+        }
+      },
+      "id": "mark_critical_notified",
+      "name": "Mark Critical as Notified",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 150]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.SUPABASE_URL }}/rest/v1/daily_digest_queue",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}",
+          "Prefer": "return=minimal"
+        },
+        "body": {
+          "event_id": "{{ $node.webhook_trigger.json.body.record.id }}",
+          "event_type": "{{ $node.webhook_trigger.json.body.record.event_type }}",
+          "severity": "{{ $node.webhook_trigger.json.body.record.severity }}",
+          "title": "{{ $node.webhook_trigger.json.body.record.title }}",
+          "details": "{{ $node.webhook_trigger.json.body.record.details }}",
+          "created_at": "{{ now.toISO() }}"
+        }
+      },
+      "id": "queue_for_digest",
+      "name": "Queue for Daily Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 500]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "{{ $env.SUPABASE_URL }}/rest/v1/compliance_events?id=eq.{{ $node.webhook_trigger.json.body.record.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "bearerToken",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}",
+          "Prefer": "return=minimal"
+        },
+        "body": {
+          "updated_at": "{{ now.toISO() }}"
+        }
+      },
+      "id": "update_dashboard_metrics",
+      "name": "Update Dashboard Metrics (All Events)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 700]
+    }
+  ],
+  "connections": {
+    "webhook_trigger": {
+      "main": [
+        [
+          {
+            "node": "is_critical_event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is_critical_event": {
+      "main": [
+        [
+          {
+            "node": "send_to_pagerduty",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "send_to_slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "send_critical_email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "is_warning_event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is_warning_event": {
+      "main": [
+        [
+          {
+            "node": "queue_for_digest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "update_dashboard_metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send_to_pagerduty": {
+      "main": [
+        [
+          {
+            "node": "mark_critical_notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send_to_slack": {
+      "main": [
+        [
+          {
+            "node": "mark_critical_notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send_critical_email": {
+      "main": [
+        [
+          {
+            "node": "mark_critical_notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark_critical_notified": {
+      "main": [
+        [
+          {
+            "node": "update_dashboard_metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "queue_for_digest": {
+      "main": [
+        [
+          {
+            "node": "update_dashboard_metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

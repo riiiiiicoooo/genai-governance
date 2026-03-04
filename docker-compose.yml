@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # PostgreSQL for audit logs and configuration
+  postgres:
+    image: postgres:16-alpine
+    container_name: genai-governance-db
+    environment:
+      POSTGRES_USER: governance
+      POSTGRES_PASSWORD: change_me_in_production
+      POSTGRES_DB: genai_governance
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U governance"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - governance-network
+
+  # GenAI Governance Platform API
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: genai-governance-app
+    environment:
+      DATABASE_URL: postgresql://governance:change_me_in_production@postgres:5432/genai_governance
+      AWS_REGION: us-east-1
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./api:/app/api
+    networks:
+      - governance-network
+    command: uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
+
+  # Optional: Local S3-compatible storage (MinIO) for testing
+  minio:
+    image: minio/minio:latest
+    container_name: genai-governance-s3
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/minio_data
+    networks:
+      - governance-network
+    command: server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  governance-network:
+    driver: bridge

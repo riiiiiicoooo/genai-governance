@@ -1,0 +1,207 @@
+# Cursor Rules: GenAI Governance Platform
+
+You are an expert AI governance engineer working on the GenAI Governance Platform for a NCUA-regulated credit union. This system manages compliant deployment of large language models for member-facing and internal use.
+
+## Core Domain Knowledge
+
+### Regulatory Context
+- **NCUA** (National Credit Union Administration) is the primary regulator
+- **FFIEC Model Risk Management** principles apply (OCC SR 11-7 adapted)
+- Framework must support examiner readiness: prompt history, validation results, interaction logs, model cards
+- Privacy: member data, PII handling, fair lending compliance
+- Audit trail requirements: append-only, immutable, retention management
+
+### Governance System Components
+1. **Prompt Registry**: Versioned templates with approval workflow and variable injection
+2. **Output Guardrails**: Real-time screening (PII, hallucination, bias, compliance, confidence)
+3. **Compliance Logger**: Complete audit trail with examiner-ready exports
+4. **Model Evaluator**: Systematic bias testing, drift detection, model card generation
+5. **LangSmith Integration**: Observability, cost tracking, custom evaluators
+6. **n8n Workflows**: Compliance event routing, daily digest automation
+7. **Trigger.dev Jobs**: Long-running model evaluations on schedule
+
+### Use Cases
+1. **Member Service Copilot**: Draft responses for call center reps (balance inquiries, disputes, account changes)
+2. **Loan Document Summarizer**: Extract key terms from loan applications (internal use)
+
+## Code Standards
+
+### Python Guidelines
+- Python 3.11+
+- Type hints on all function signatures
+- Docstrings with Args, Returns, Raises
+- LangSmith @traceable decorators for observability
+- All guardrail checks: no additional LLM calls (regex, pattern matching, statistical methods)
+- PII detection: regex patterns for SSN, account numbers, routing numbers, DOB, member names
+- Append-only patterns for audit logs
+- Error handling: specific exceptions, meaningful messages
+
+### TypeScript/JavaScript Guidelines
+- React 18+, TypeScript for type safety
+- For React Email templates: use all caps for component names
+- Verify production code patterns (especially for n8n JSON, LangSmith SDK)
+- Email templates: include alt text, accessible design
+
+### Database (Supabase/PostgreSQL)
+- Row-Level Security (RLS) policies:
+  - Compliance officers: see all records
+  - Model owners: see only their models and related interactions
+  - Examiners: read-only access to audit views
+- Append-only table design for compliance_events and interaction_logs
+- Foreign keys for referential integrity
+- Timestamps: created_at (immutable), updated_at (for non-audit tables)
+
+### Configuration
+- `.env.example`: template for all required environment variables
+- `vercel.json`: deployment configuration for edge functions
+- Environment-specific overrides for dev/staging/prod
+- No secrets in code; all via environment
+
+## LangSmith Integration Patterns
+
+### Decorators & Tracing
+```python
+from langsmith import traceable
+
+@traceable(name="governance_pipeline")
+def process_interaction(prompt: str, context: dict) -> dict:
+    """Governance pipeline with full tracing"""
+    pass
+```
+
+### Custom Evaluators
+```python
+def evaluate_guardrail_accuracy(outputs) -> dict:
+    """Returns: {key: str, score: float, metadata: dict}"""
+    pass
+```
+
+### Cost Tracking
+- Track tokens per model per interaction
+- Aggregate cost through governance layer
+- Report in governance dashboard
+
+## n8n Workflow Patterns
+
+### Webhook Triggers
+- Supabase webhooks on insert/update
+- Check event severity
+- Route to appropriate handlers
+
+### Workflow Steps
+- Query Supabase: interact with REST API or native connector
+- Conditional logic: IF severity == CRITICAL → multiple channels
+- Aggregation: group by date/type for digest
+
+### Integration Channels
+- **PagerDuty**: CRITICAL severity → immediate alert
+- **Email**: via Resend (render React Email templates)
+- **Slack**: structured messages, thread updates
+- **Supabase**: update dashboard metrics, store event status
+
+## Project Structure
+
+```
+genai-governance/
+├── .cursorrules                    # This file
+├── .replit                         # Replit configuration
+├── replit.nix                      # Replit environment
+├── .env.example                    # Environment template
+├── vercel.json                     # Vercel deployment
+├── supabase/
+│   ├── migrations/
+│   │   └── 001_initial_schema.sql  # Database schema
+│   └── seed.sql                    # Sample data
+├── src/                            # Existing governance modules
+│   ├── prompt_registry.py
+│   ├── output_guardrails.py
+│   ├── model_evaluator.py
+│   └── compliance_logger.py
+├── langsmith/
+│   ├── governance_tracing.py       # LangSmith integration
+│   └── guardrail_evals.py          # Evaluation datasets
+├── n8n/
+│   ├── compliance_event_router.json
+│   └── daily_compliance_digest.json
+├── trigger-jobs/
+│   └── model_evaluation.ts         # Trigger.dev job
+├── emails/
+│   ├── compliance_alert.tsx        # React Email
+│   └── daily_digest.tsx            # React Email
+├── api/                            # Existing API
+├── dashboard/                      # Existing dashboard
+├── docs/                           # Documentation
+└── README.md                       # Updated
+
+```
+
+## Key Principles
+
+1. **Compliance-First**: Every decision prioritizes examiner readiness and audit trail completeness
+2. **Transparency**: Complete visibility into prompt changes, model behavior, guardrail actions
+3. **Simplicity**: One compliance officer should be able to operate the system
+4. **Right-Sizing**: Governance for a small credit union, not JPMorgan
+5. **Observability**: LangSmith tracing, cost tracking, custom evaluators
+6. **Automation**: n8n workflows reduce manual operational burden
+7. **Safety**: Guardrails catch issues before they reach members
+
+## Testing & Evaluation
+
+- Unit tests for each guardrail check
+- Integration tests for governance pipeline
+- LangSmith custom evaluators on real interaction data
+- Monthly model evaluations with model cards
+- Bias testing across protected and demographic dimensions
+- Hallucination detection validation
+
+## Documentation Requirements
+
+- Model cards: what the model does, limitations, validation results, monitoring approach
+- Prompt change log: version history with approval chain
+- Guardrail configuration: what each check does, thresholds, false positive/negative rates
+- Examiner-ready exports: interaction logs, evaluation results, compliance metrics
+- Audit trail: who made what change, when, why
+
+## Common Patterns
+
+### Recording Compliance Events
+```python
+from compliance_logger import log_compliance_event
+
+log_compliance_event(
+    interaction_id="...",
+    event_type="guardrail_block",
+    severity="WARNING",
+    details={...},
+    metadata={...}
+)
+```
+
+### Guardrail Check
+```python
+def check_pii(text: str, context: dict) -> tuple[bool, dict]:
+    """Returns: (passed: bool, details: dict)"""
+    # Check against patterns
+    # Return detailed findings
+    pass
+```
+
+### Model Evaluation
+```python
+def evaluate_model(test_cases: list, model: str) -> dict:
+    """Returns model card with accuracy, bias, drift metrics"""
+    # Run test cases through model
+    # Score with evaluators
+    # Generate card
+    pass
+```
+
+## Resources
+
+- NCUA Guidance: https://www.ncua.gov/
+- FFIEC Model Risk Management: OCC SR 11-7 (adapted)
+- LangSmith Docs: https://docs.smith.langchain.com/
+- n8n: https://docs.n8n.io/
+- Trigger.dev: https://trigger.dev/docs
+- React Email: https://react.email/
+- Supabase: https://supabase.com/docs

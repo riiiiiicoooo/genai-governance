@@ -96,6 +96,74 @@ A governance layer that sits between the credit union's applications and the LLM
 
 ---
 
+## Modern Stack Integration
+
+**LangSmith Tracing & Observability**
+
+Complete observability for the governance pipeline:
+- `@traceable` decorators on all governance components (prompt rendering, guardrail evaluation, compliance logging)
+- Custom evaluators: guardrail accuracy (false positive/negative rates), PII detection (precision/recall), confidence calibration
+- Real-time cost tracking per LLM interaction through governance layer
+- Trace metadata: prompt version, guardrail version, final decision (deliver/block/warn)
+
+**n8n Automation Workflows**
+
+Two production workflows orchestrate compliance operations:
+
+1. **Compliance Event Router** (`n8n/compliance_event_router.json`)
+   - Supabase webhook triggers on compliance_event insert
+   - Routes by severity: CRITICAL → PagerDuty + Slack + Email, WARNING → daily digest queue, INFO → logging only
+   - Atomically updates notification status and dashboard metrics
+
+2. **Daily Compliance Digest** (`n8n/daily_compliance_digest.json`)
+   - Cron job at 8 AM daily
+   - Queries yesterday's interactions from Supabase
+   - Aggregates: total interactions, block rate, PII caught, cost, guardrail latency
+   - Compares trends vs. prior period
+   - Generates HTML email with React Email template
+   - Stores report in audit_reports table
+
+**Trigger.dev Scheduled Jobs**
+
+Long-running evaluations managed by Trigger.dev:
+
+- `trigger-jobs/model_evaluation.ts`: Monthly comprehensive model evaluation
+  - Loads test case suite from guardrail_evals.py
+  - Runs through governance pipeline for each model
+  - Scores accuracy/bias/compliance/confidence
+  - Generates model cards for MRM documentation
+  - Stores results; logs completion as compliance event
+
+**React Email Templates**
+
+Production-ready email designs with accessibility:
+
+- `emails/compliance_alert.tsx`: Critical event notifications with interaction details, guardrail info, recommended actions
+- `emails/daily_digest.tsx`: Daily metrics summary with trends, unresolved items, quick facts, recommended actions
+
+**Supabase Schema & RLS**
+
+Enterprise-grade database (`supabase/migrations/001_initial_schema.sql`):
+- Prompt templates with approval workflows
+- Guardrail configurations and versioning
+- Immutable interaction logs (append-only for compliance)
+- Compliance events with severity routing
+- Model evaluations and model cards
+- Audit reports and dashboard metrics
+- Row-level security policies:
+  - Compliance officers see all records
+  - Model owners see their models and interactions
+  - Examiners get read-only access to audit views
+
+**Configuration & Deployment**
+
+- `.cursorrules`: Governance context for AI-assisted development
+- `.replit` + `replit.nix`: Replit environment for cloud development
+- `.env.example`: Template for all 20+ environment variables
+- `vercel.json`: Deployment configuration with cron triggers for daily digest and monthly evaluation
+
+---
+
 ## Modules
 
 | File | Purpose |
@@ -105,6 +173,13 @@ A governance layer that sits between the credit union's applications and the LLM
 | `model_evaluator.py` | Systematic model testing. Evaluation suites, bias measurement, drift detection. Generates model risk documentation. |
 | `compliance_logger.py` | Complete audit trail. Immutable interaction logs, examiner-ready exports, retention management. |
 | `dashboard.jsx` | Governance dashboard. Guardrail metrics, model health, compliance status, evaluation trends. |
+| `langsmith/governance_tracing.py` | LangSmith integration with @traceable decorators, custom evaluators, cost tracking. |
+| `langsmith/guardrail_evals.py` | 30+ test cases across 5 guardrail types (PII, hallucination, bias, compliance, confidence) with scoring. |
+| `n8n/compliance_event_router.json` | Routes compliance events by severity to PagerDuty, Slack, email. |
+| `n8n/daily_compliance_digest.json` | Daily 8 AM digest: aggregates metrics, generates trends, emails compliance officer. |
+| `trigger-jobs/model_evaluation.ts` | Monthly scheduled evaluation: test suite, model cards, bias detection, MRM documentation. |
+| `emails/compliance_alert.tsx` | React Email: critical event alerts with interaction details and recommended actions. |
+| `emails/daily_digest.tsx` | React Email: daily metrics summary with trends and open items. |
 | `FUTURE_ENHANCEMENTS.md` | Enhancements scoped but not built. |
 
 ---
