@@ -184,6 +184,35 @@ Enterprise-grade database (`supabase/migrations/001_initial_schema.sql`):
 
 ---
 
+## Engagement & Budget
+
+### Team & Timeline
+
+| Role | Allocation | Duration |
+|------|-----------|----------|
+| Lead PM (Jacob) | 15 hrs/week | 12 weeks |
+| Lead Developer (US) | 35 hrs/week | 12 weeks |
+| Offshore Developer(s) | 1 × 35 hrs/week | 12 weeks |
+| QA Engineer | 15 hrs/week | 12 weeks |
+
+**Timeline:** 12 weeks total across 3 phases
+- **Phase 1: Discovery & Design** (2 weeks) — NCUA compliance requirements mapping, AI use case inventory, guardrail framework design, prompt library architecture
+- **Phase 2: Core Build** (7 weeks) — Prompt management system, output screening pipeline, audit logging, model evaluation framework, compliance dashboard
+- **Phase 3: Integration & Launch** (3 weeks) — LangSmith integration, staff training materials, NCUA exam documentation, pilot with member services team
+
+### Budget Summary
+
+| Category | Cost | Notes |
+|----------|------|-------|
+| PM & Strategy | $33,300 | Discovery, specs, stakeholder management |
+| Development (Lead + Offshore) | $89,460 | Core platform build |
+| AI/LLM Token Budget | $2,400/month | Claude Haiku for guardrail screening ~3M tokens/month |
+| Infrastructure | $3,840/month | Supabase Pro, n8n, Trigger.dev, Vercel, misc |
+| **Total Engagement** | **$130,000** | Fixed-price, phases billed at milestones |
+| **Ongoing Run Rate** | **$650/month** | Infrastructure + AI tokens + 2hrs support |
+
+---
+
 ## Client Context
 
 **Credit union profile:**
