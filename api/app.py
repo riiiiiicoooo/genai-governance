@@ -25,6 +25,16 @@ from src.compliance_logger import ComplianceLogger, InteractionLog, LogLevel
 from src.model_evaluator import ModelEvaluator
 
 # ============================================================================
+# PRODUCTION NOTES
+# This is a portfolio demonstration. In a production deployment:
+# - All endpoints would require Clerk/Auth0 JWT middleware with role-based access
+# - Guardrail checks would use NeMo Guardrails or Guardrails AI for classifier-
+#   based prompt injection detection (not just regex — see OWASP LLM Top 10)
+# - Compliance logs containing PII would be encrypted at rest (AES-256-GCM)
+#   with key rotation via AWS KMS, satisfying SR 11-7 examination requirements
+# ============================================================================
+
+# ============================================================================
 # Request/Response Models
 # ============================================================================
 

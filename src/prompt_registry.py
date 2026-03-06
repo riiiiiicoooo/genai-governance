@@ -399,6 +399,39 @@ class PromptRegistry:
         version.deployed_by = deployed_by
         return version
 
+    # -- Prompt Injection Defense --------------------------------------------
+
+    @staticmethod
+    def _sanitize_variable(text: str) -> str:
+        """Sanitize user-supplied variable values against prompt injection.
+
+        Basic defense-in-depth: strips known injection patterns and system
+        prompt delimiters. In production, pair with a classifier-based
+        detector (e.g., Lakera Guard, Rebuff, NeMo Guardrails).
+
+        See: OWASP LLM Top 10 — LLM01: Prompt Injection
+        https://owasp.org/www-project-top-10-for-large-language-model-applications/
+        """
+        if not text:
+            return text
+
+        sanitized = text
+        injection_patterns = [
+            r"(?i)ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)",
+            r"(?i)disregard\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)",
+            r"(?i)you\s+are\s+now\s+(a|an|the)\s+",
+            r"(?i)new\s+instructions?\s*:",
+            r"(?i)system\s*prompt\s*:",
+        ]
+        for pattern in injection_patterns:
+            sanitized = re.sub(pattern, "[BLOCKED]", sanitized)
+
+        # Strip system prompt delimiters
+        for delim in ["<|system|>", "<|user|>", "<|assistant|>", "[INST]", "[/INST]"]:
+            sanitized = sanitized.replace(delim, "")
+
+        return sanitized
+
     # -- Prompt Rendering ---------------------------------------------------
 
     def render(
@@ -459,10 +492,19 @@ class PromptRegistry:
                             f"Variable '{var.name}' fails validation pattern."
                         )
 
-        # Render the user prompt
-        rendered_user = version.user_prompt_template
+        # Input sanitization for prompt injection defense — see OWASP LLM Top 10 (LLM01)
+        # In production, pair with classifier-based detection (Lakera Guard, NeMo Guardrails)
+        sanitized_variables = {}
         for var_name, value in variables.items():
-            rendered_user = rendered_user.replace(f"{{{{{var_name}}}}}", value)
+            sanitized_variables[var_name] = self._sanitize_variable(value)
+
+        # Render the user prompt with sanitized variables
+        rendered_user = version.user_prompt_template
+        for var_name, value in sanitized_variables.items():
+            # Wrap user content in XML delimiters to help the LLM distinguish
+            # system instructions from user-supplied data
+            delimited_value = f"<user_input name=\"{var_name}\">{value}</user_input>"
+            rendered_user = rendered_user.replace(f"{{{{{var_name}}}}}", delimited_value)
 
         # Track PII
         pii_vars = [
