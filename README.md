@@ -79,10 +79,10 @@ A governance layer that sits between the credit union's applications and the LLM
 
 2. The **Prompt Registry** selects the approved prompt template ("member_service_response_v2.1"), injects the context variables, and logs the complete prompt.
 
-3. The prompt goes to the LLM provider (the credit union uses AWS Bedrock).
+3. The prompt goes to the LLM provider. The credit union uses **AWS Bedrock** as the primary provider with **Azure OpenAI** as a secondary option for multi-cloud resilience and customer mandates.
 
-4. The response comes back. Before the rep sees it, **Output Guardrails** run 5 checks:
-   - **PII scan:** Does the response contain SSNs, account numbers, or member data that shouldn't be surfaced?
+4. The response comes back. Before the rep sees it, **Output Guardrails** run 6 checks:
+   - **PII scan:** Does the response contain SSNs, account numbers, or member data that shouldn't be surfaced? Uses **Presidio** NLP-based detection alongside regex patterns for high-precision recognition.
    - **Hallucination check:** Does the response reference rates, balances, or fees not in the input context?
    - **Bias screen:** Does the response contain language that could be discriminatory?
    - **Compliance filter:** Does the response make unauthorized claims or guarantees?
@@ -293,10 +293,10 @@ A year ago, the same examiner's question got a blank stare. Now it gets a live d
 ## Technical Notes
 
 - Python 3.11+, React with Recharts
-- Designed for AWS deployment (Bedrock for LLM access, S3 for log storage)
-- No direct LLM dependencies -- the governance layer is model-agnostic
-- Guardrail checks use regex, pattern matching, and statistical methods (not additional LLM calls)
-- PII detection uses regex patterns for financial services PII (SSN, account numbers, routing numbers, DOB)
+- **Multi-cloud LLM support:** AWS Bedrock (primary) and Azure OpenAI (secondary provider for resilience and client mandates)
+- No direct LLM dependencies -- the governance layer is model-agnostic, allowing seamless provider switching
+- **PII detection:** Presidio NLP-based recognizers (Microsoft-backed, supports custom entity types, runs locally without external API calls) combined with regex patterns for financial services PII (SSN, account numbers, routing numbers, DOB)
+- Guardrail checks use regex, pattern matching, statistical methods, and Presidio NLP (not additional LLM calls for screening)
 - Compliance logger uses append-only storage pattern for audit integrity
 - In production, logs stored in S3 with Object Lock for retention compliance
 - All modules include synthetic data for portfolio demonstration

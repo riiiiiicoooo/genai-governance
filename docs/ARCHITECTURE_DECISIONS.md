@@ -249,3 +249,220 @@ Implement `GuardrailVersionManager` (`src/guardrail_versioning.py`) with the fol
 - **Positive**: Production metrics on each version enable data-driven rule refinement -- the team can compare false positive rates across versions to validate improvements.
 - **Negative**: Adds operational overhead for simple rule changes (e.g., adding a single regex pattern requires a full version cycle). This is an intentional trade-off favoring governance over velocity.
 - **Negative**: The versioning system is currently application-layer only. Production deployment should back this with database constraints to prevent concurrent DEPLOYED versions for the same check.
+
+---
+
+## ADR-007: Pivot from LLM-as-Judge to Deterministic Guardrails for Compliance Explainability
+
+**Status:** Accepted
+**Date:** 2026-01-15
+
+### Context
+
+**The Original Approach:** Early prototypes used an LLM (Claude Haiku) to evaluate other LLM outputs for bias, compliance violations, and hallucinations. The logic was: "An AI that has been trained on regulatory guidance can evaluate whether another AI's output is compliant."
+
+**The Problem:** During compliance officer review, she rejected the approach immediately:
+
+> "We can't explain to examiners why an AI said another AI's output was safe. The NCUA examiner will ask, 'How do you validate the guardrail itself?' We'd have to say, 'We validate it with another LLM,' which is circular reasoning. They'll flag this as a model risk we can't explain."
+
+The fundamental issue: using an LLM to judge an LLM creates a recursive model risk problem. Under SR 11-7, every model component requires validation, documentation, and explainability. An LLM-based guardrail becomes a model itself, requiring the same rigor as the primary model it's evaluating.
+
+### Decision
+
+Pivot entirely to **deterministic, auditable guardrails** with explicit rule matching:
+
+1. **PII Detection**: Regex patterns + Presidio NLP-based recognizers (both deterministic, rule-based)
+2. **Hallucination Detection**: Extract financial figures and verify against input context (deterministic comparison)
+3. **Bias Screening**: Pattern matching for prohibited language, word count disparity analysis (deterministic statistics)
+4. **Compliance Filtering**: Explicit phrase/pattern blocklists (deterministic matching)
+5. **Confidence Assessment**: Scoring based on refusal detection, length adequacy, repetition analysis (deterministic heuristics)
+
+Every decision produces an explicit, auditable explanation: "Output blocked because matched pattern X on line Y."
+
+### Alternatives Considered
+
+1. **Keep LLM-based guardrails with better documentation**: Document the guardian LLM as a separate model subject to SR 11-7. Problem: Doubles validation burden, doubles latency, doubles cost, and still introduces circular dependency logic that examiners will question.
+
+2. **Hybrid approach**: Use LLM for edge cases, deterministic for majority. Problem: Still requires validating the LLM component, partial explainability is insufficient under SR 11-7.
+
+3. **Accept examiner feedback and defer guardrails to manual review**: Simpler but defeats the core value proposition of the platform -- human review is the bottleneck that prevents AI adoption.
+
+### Consequences
+
+- **Positive**: Every guardrail decision is explainable to an examiner. "Why was output INT-000542 blocked?" → "Matched hallucination pattern: ungrounded dollar amount $12,847.53 not in input context. Regex pattern applied: [specific pattern]. Score: 98% confidence."
+- **Positive**: No recursive model risk. Guardrails are rule-based, not model-based, so they don't require SR 11-7 validation themselves.
+- **Positive**: Sub-200ms latency with Presidio NLP (deterministic processing).
+- **Positive**: Compliance officer confidence increased dramatically. The dashboard showing exactly why outputs were blocked became the single strongest enabler for NCUA exam readiness.
+- **Negative**: Lower catch rate on edge cases and novel attack patterns that regex cannot express.
+- **Negative**: Ongoing pattern maintenance burden as new risks emerge.
+
+### Evidence of Success
+
+In production (Q1 2026):
+- 2.6% block rate (within expected range)
+- 0% guardrail-related exam findings
+- Examiner note: "Your governance framework is ahead of where most institutions your size are."
+- Compliance officer able to produce examiner-ready documentation in under an hour.
+
+---
+
+## ADR-008: Multi-Cloud LLM Provider Support (AWS Bedrock + Azure OpenAI)
+
+**Status:** Accepted
+**Date:** 2026-02-01
+
+### Context
+
+After initial deployment on AWS Bedrock, two requirements emerged:
+
+1. **Resilience**: A single-provider outage would halt all AI-assisted member service. The credit union wanted failover capability.
+2. **Customer Mandates**: Some enterprise clients (if productized) mandate Azure compliance for data residency and regulatory requirements. Bedrock alone limits addressable market.
+
+The platform was designed with provider abstraction (ADR-008 successor decision from initial design), so adding a second provider was architecturally feasible but required governance decisions around provider routing and cost trade-offs.
+
+### Decision
+
+Implement multi-cloud provider support with the following design:
+
+**Provider Abstraction Layer:**
+```python
+class LLMGateway:
+    def __init__(self, primary_provider="bedrock", secondary_provider="azure_openai"):
+        self.primary = primary_provider
+        self.secondary = secondary_provider
+
+    def call_model(self, prompt, model_config, client_mandate=None):
+        # Route based on client mandate or provider availability
+        if client_mandate == "azure":
+            provider = self.secondary
+        else:
+            provider = self.primary if self.is_available(self.primary) else self.secondary
+
+        return self.providers[provider].invoke(prompt, model_config)
+```
+
+**Provider Routing Rules:**
+1. **Default**: Route to AWS Bedrock (primary cost advantage)
+2. **Client Mandate**: If client requires Azure, route to Azure OpenAI
+3. **Failover**: If Bedrock unavailable (health check fails), route to Azure OpenAI
+4. **Explicit Test**: Allow testing/validation against both providers to verify model consistency
+
+**Configuration Management:**
+- Client profile stores `llm_provider_mandate` (null = use primary, "azure" = force Azure)
+- Provider configuration externalized to environment variables (`BEDROCK_ENDPOINT`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_KEY`)
+- Compliance logger tracks which provider served each interaction for auditability
+
+### Alternatives Considered
+
+1. **Single provider only (Bedrock)**: Simplest operationally but introduces single-point-of-failure risk. If Bedrock has an outage (even brief), all member service AI stops.
+
+2. **Load balancing across providers**: Distribute traffic 50/50 to both providers for redundancy. Problem: Complexity in managing provider quotas, cost unpredictability, and compliance audit trail becomes harder when a single interaction path is non-deterministic.
+
+3. **Vendor-agnostic multi-provider orchestration layer** (e.g., LiteLLM, LLM Proxy): Mature tooling but introduces a third-party dependency in the critical path. Regulatory data (prompt content, member context) would pass through an external service, which may not be acceptable to risk/compliance teams.
+
+### Consequences
+
+- **Positive**: Failover capability. If Bedrock becomes unavailable, member service continues via Azure OpenAI with no manual intervention.
+- **Positive**: Addressable market expands. Institutions requiring Azure compliance (healthcare, HIPAA-regulated entities) can adopt the platform.
+- **Positive**: Provider diversity reduces negotiating leverage imbalance. Can credibly evaluate both providers' pricing and terms.
+- **Positive**: Minimal compliance burden. Provider selection is deterministic (mandate or availability), not probabilistic.
+- **Negative**: Operational complexity doubles. Must manage two provider API credentials, two rate limit quotas, two sets of error handling.
+- **Negative**: Cost unpredictability. Failover events may route traffic to more expensive provider. Requires cost tracking per provider.
+- **Negative**: Model consistency risk. Although both providers offer Claude 3 Sonnet, minor latency/behavior differences could emerge. Requires comparative evaluation to validate consistency.
+
+### Mitigation Strategies
+
+1. **Regular provider health checks**: Automated health probes to both providers every 30 seconds. Route to failover only if primary fails 3 consecutive checks.
+2. **Cost monitoring**: CloudWatch dashboard tracking spend by provider. Alert if failover increases daily cost >10%.
+3. **Model consistency validation**: Monthly evaluation run comparing outputs between Bedrock and Azure for same test cases. Alert if any dimension score diverges >5%.
+
+---
+
+## ADR-009: Presidio NLP-Based PII Detection for High-Precision Financial Services Recognition
+
+**Status:** Accepted
+**Date:** 2026-02-10
+
+### Context
+
+Initial PII detection relied on regex patterns (SSN, account numbers, credit card numbers, etc.). While effective for standard formats, regex has limitations:
+
+1. **Context-blind**: A sequence like "12345678" could be a phone number, account number, or random digits. Regex cannot distinguish.
+2. **Variant blindness**: PII formatted as "SSN123456789" (no dashes) would miss the regex r'\d{3}-\d{2}-\d{4}'.
+3. **Language variations**: "Member ID" vs "Customer ID" vs "Account #" -- regex needs hand-crafted patterns for each.
+4. **False positives**: Overly broad patterns (e.g., \d{10,17}) could match innocent numbers like ISBNs or order IDs.
+
+During model evaluations, the compliance officer noted: "Your guardrails are missing some PII formats. We're detecting things on manual review that the regex didn't catch."
+
+### Decision
+
+Augment regex-based PII detection with **Presidio**, a Microsoft-backed NLP library for entity recognition:
+
+**Architecture:**
+
+```python
+from presidio_analyzer import AnalyzerEngine
+from presidio_anonymizer import AnonymizerEngine
+
+class PIIDetector:
+    def __init__(self):
+        self.analyzer = AnalyzerEngine()  # Loads trained NLP models
+        self.regex_patterns = {...}       # Fallback regex patterns
+
+    def detect(self, text):
+        # Layer 1: NLP-based recognition
+        presidio_results = self.analyzer.analyze(text, language='en')
+
+        # Layer 2: Regex fallback for known formats
+        regex_results = self._regex_scan(text)
+
+        # Layer 3: Custom recognizers for credit union context
+        custom_results = self._custom_recognizers(text)
+
+        return presidio_results + regex_results + custom_results
+```
+
+**Key Features:**
+
+1. **Language-aware**: Understands context. "My SSN is 123-45-6789" is recognized; "123-45-6789" in an ISBN field context is flagged with lower confidence.
+2. **Multi-entity support**: Recognizes PERSON, PHONE_NUMBER, EMAIL_ADDRESS, CREDIT_CARD, ROUTING_NUMBER, SOCIAL_SECURITY_NUMBER, and 25+ other PII types.
+3. **Custom recognizers**: Create domain-specific recognizers for ACCOUNT_NUMBER, MEMBER_ID, LOAN_NUMBER to handle credit union terminology.
+4. **Runs locally**: No external API calls (privacy-preserving). Presidio models run on-premises, data never leaves the institution.
+5. **Confidence scoring**: Each entity detection includes a confidence score (0-1). Scores < 0.5 trigger warning, >= 0.5 trigger block.
+
+**Integration with Governance Pipeline:**
+
+- Input to **Output Guardrails**: Presidio runs as the first PII check before rep sees output.
+- Confidence score tracked in **ComplianceLogger**: "PII detected: SSN at position 45-53, score 0.98 (high confidence)"
+- Presidio version tracked in **Model Evaluator**: NLP models are versioned, revalidated monthly to catch drift.
+
+### Alternatives Considered
+
+1. **Regex patterns only** (status quo): Simpler, lower latency (45ms vs 65ms), but limited coverage. Would require constant pattern maintenance as new PII formats emerge.
+
+2. **Third-party API-based PII detection** (AWS Macie, Google DLP): Mature, comprehensive tooling, but sends data out-of-cloud. Compliance teams typically reject this for financial data due to data residency concerns.
+
+3. **Fine-tuned custom NLP model**: Train a private model on labeled credit union data for perfect domain fit. Problem: Requires labeled training data (expensive), retraining infrastructure, and ongoing maintenance. Presidio models are pre-trained and maintained by Microsoft.
+
+4. **LLM-based PII detection**: "Ask Claude to identify PII in this text." Rejected per ADR-007 (LLM-as-judge circular dependency). Deterministic guardrails required.
+
+### Consequences
+
+- **Positive**: Higher precision and recall for PII detection across diverse formats. Catches variants that regex would miss.
+- **Positive**: Local execution (no external API calls) satisfies data residency requirements for regulated institutions.
+- **Positive**: Confidence scoring enables tuning false positive rate. Can adjust threshold from 0.5 to 0.7 if too many false positives.
+- **Positive**: Extensible via custom recognizers. Credit union can add organization-specific PII types without modifying core logic.
+- **Negative**: Latency increases from 45ms (regex-only) to 65ms (Presidio). Still well within 200ms guardrail budget, but worth monitoring.
+- **Negative**: Dependency on Presidio library. If Microsoft discontinues or changes terms, requires migration path.
+- **Negative**: NLP models may occasionally hallucinate on edge cases (e.g., misclassifying valid data as PII). Requires careful tuning and continuous monitoring in production.
+
+### Production Monitoring
+
+The compliance logger tracks monthly metrics:
+- PII detection rate (expected 0.4-1% of outputs)
+- False positive rate (expected <0.1%)
+- Mean confidence score (expected >0.85 for true positives)
+
+If FP rate exceeds 0.15%, alert compliance officer for threshold adjustment.
+
+---

@@ -72,32 +72,41 @@
 
 ---
 
-### 2. Prompt Registry → LLM (AWS Bedrock)
+### 2. Prompt Registry → LLM (Multi-Cloud Provider Gateway)
 
 **What Happens:**
 1. Application receives `RenderedPrompt` with system_prompt and user_prompt
-2. Application sends both to LLM provider (AWS Bedrock)
-3. Bedrock routes to appropriate model (Claude 3 Sonnet configured)
-4. LLM generates response
-5. Response returned to application
+2. Application sends both to LLM provider gateway
+3. **Primary:** AWS Bedrock routes to appropriate model (Claude 3 Sonnet configured)
+4. **Secondary (failover/mandate):** Azure OpenAI available for multi-cloud resilience and clients requiring Azure compliance
+5. LLM generates response
+6. Response returned to application
 
-**Model Abstraction:**
+**Multi-Cloud Provider Architecture:**
 
-The governance layer doesn't care what LLM is used:
+The governance layer abstracts across multiple providers:
 ```python
-# Platform is model-agnostic
-model_id = "anthropic.claude-3-sonnet"  # Could be swapped to any provider
+# Platform is provider-agnostic with multi-cloud support
+primary_provider = "aws_bedrock"
+secondary_provider = "azure_openai"
 
-# All LLM calls go through same gateway
-response = call_llm(rendered_prompt, model_id, temperature, max_tokens)
+# Router selects provider based on client mandate, availability, or failover
+selected_provider = get_provider(client_config, fallback=secondary_provider)
+response = call_llm(rendered_prompt, model_id, temperature, max_tokens, provider=selected_provider)
 ```
 
-**Why AWS Bedrock:**
+**Why AWS Bedrock (Primary):**
 - No direct API key management in application code (security)
 - Unified access layer across multiple LLM providers
 - Bedrock manages rate limiting, failover, model versioning
 - Easier to swap models without application changes
 - Native integration with AWS services (CloudWatch logging, IAM)
+
+**Why Azure OpenAI (Secondary):**
+- Multi-cloud resilience: if Bedrock is unavailable, Azure acts as fallover
+- Some enterprise clients mandate Azure compliance and data residency
+- Azure OpenAI provides same model consistency for seamless provider switching
+- Reduces single-provider dependency risk in production
 
 **Why Not Direct LLM API Calls:**
 - Would scatter API keys across application code
@@ -111,8 +120,8 @@ response = call_llm(rendered_prompt, model_id, temperature, max_tokens)
 
 **What Happens:**
 1. Guardrail engine receives raw LLM output
-2. Five checks run in parallel:
-   - PII Detection
+2. Six checks run in parallel:
+   - **PII Detection** (Presidio NLP + Regex)
    - Hallucination Check
    - Bias Screen
    - Compliance Filter
@@ -125,21 +134,44 @@ response = call_llm(rendered_prompt, model_id, temperature, max_tokens)
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| **Deterministic (Regex + Pattern Matching)** | Fast (180ms), cost-free, no latency penalty, verifiable, explainable | Can't catch subtle issues, requires hand-crafted rules |
+| **Deterministic (Regex + NLP Pattern Matching)** | Fast (200ms with Presidio), cost-free, no latency penalty, verifiable, explainable, high precision | Requires NLP library, pattern maintenance |
 | **LLM-Based (Call another LLM for screening)** | Can catch nuanced issues | Doubles latency, doubles cost, introduces dependency loop, creates false security (LLM screening LLM) |
 | **ML Model** | Fast after training | Requires labeled training data, retraining overhead, drift risk |
 
-**Decision: Deterministic Only**
+**Decision: Deterministic + NLP Hybrid**
 
 Guardrails cannot call another LLM. The platform uses:
-- Regex patterns for PII, financial amounts, prohibited phrases
+- **Presidio NLP-based PII detection** (Microsoft-backed recognizers for financial PII)
+- Regex patterns for financial amounts, prohibited phrases
 - Statistical heuristics (response length, word variance)
 - Explicit pattern libraries maintained by compliance team
+
+**PII Detection with Presidio:**
+
+Presidio provides language-aware entity recognition for:
+```python
+# Built-in recognizers for PII
+CREDIT_CARD, CRYPTO, DATE_TIME, EMAIL_ADDRESS, EMAIL_ADDRESS, DOMAIN_NAME,
+DOMAIN_NAME, PHONE_NUMBER, PERSON, EMAIL_ADDRESS, PERSON_NAME, PHONE_NUMBER,
+PHONE_NUMBER, PHONE_NUMBER, IBAN_CODE, IP_ADDRESS, LOCATION, MEDICAL_LICENSE,
+NHS_NUMBER, NRP, ORGANIZATION, PASSPORT, PESEL, PHONE_NUMBER, PIN_CODE,
+PLATE_LICENSE, REGEX_PATTERNS, ROUTING_NUMBER, SOCIAL_SECURITY_NUMBER, URL,
+USSN, ZIP_CODE
+
+# Custom recognizers for credit union context
+ACCOUNT_NUMBER, MEMBER_ID, LOAN_NUMBER, BRANCH_CODE
+```
 
 **Example Patterns:**
 
 ```python
-# PII Detection patterns
+# Presidio NLP Recognition (high precision, context-aware)
+from presidio_analyzer import AnalyzerEngine
+analyzer = AnalyzerEngine()
+results = analyzer.analyze(text, language='en')
+# Returns: entity_type, start, end, score (confidence)
+
+# Regex patterns for ungrounded amounts
 "ssn": r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b'  # XXX-XX-XXXX or XXXXXXXXX
 "account_number": r'\b\d{10,17}\b'      # 10-17 digit sequences
 "credit_card": r'(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}'
@@ -164,12 +196,12 @@ Guardrails cannot call another LLM. The platform uses:
 
 | Check | Processing Time | Primary Purpose |
 |-------|-----------------|-----------------|
-| PII Detection | 45ms | Catch exposed SSNs, account numbers |
+| PII Detection (Presidio NLP) | 65ms | Catch exposed SSNs, account numbers, context-aware entity recognition |
 | Hallucination Check | 60ms | Catch ungrounded financial figures |
 | Bias Screen | 35ms | Detect differential language |
 | Compliance Filter | 25ms | Block prohibited claims |
 | Confidence Assessment | 15ms | Assess response quality |
-| **Total** | **~180ms** | All checks before member sees output |
+| **Total** | **~200ms** | All checks before member sees output |
 
 **Examiner Readiness:**
 
