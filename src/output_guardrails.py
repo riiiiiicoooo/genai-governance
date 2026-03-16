@@ -495,9 +495,11 @@ class GuardrailEngine:
 
     Every output passes through all five checks. The engine determines
     the final action based on the most severe finding.
+
+    Reports are cached in memory and also persisted to the database via Redis.
     """
 
-    def __init__(self):
+    def __init__(self, db_session=None):
         self._pii = PIIDetector()
         self._hallucination = HallucinationDetector()
         self._bias = BiasScreener()
@@ -505,6 +507,15 @@ class GuardrailEngine:
         self._confidence = ConfidenceAssessor()
         self._reports: list[GuardrailReport] = []
         self._interaction_counter = 0
+        self._db_session = db_session
+        self._redis = None
+
+        # Try to import Redis client
+        try:
+            from src.db import get_redis_client
+            self._redis = get_redis_client()
+        except (ImportError, Exception):
+            self._redis = None
 
     def assess(
         self,
@@ -567,7 +578,71 @@ class GuardrailEngine:
         )
 
         self._reports.append(report)
+
+        # Persist to database if available
+        if self._db_session:
+            try:
+                from src.db import GuardrailReportORM
+                checks_json = [
+                    {
+                        "check_name": c.check_name,
+                        "result": c.result.value,
+                        "confidence": c.confidence,
+                        "details": c.details,
+                        "findings": c.findings,
+                        "processing_time_ms": c.processing_time_ms,
+                    }
+                    for c in checks
+                ]
+                db_report = GuardrailReportORM(
+                    id=interaction_id,
+                    interaction_id=interaction_id,
+                    assessed_at=report.assessed_at,
+                    action=report.action.value,
+                    template_id=report.template_id,
+                    version_id=report.version_id,
+                    model_id=report.model_id,
+                    input_length=report.input_length,
+                    output_length=report.output_length,
+                    checks=checks_json,
+                    checks_passed=report.checks_passed,
+                    checks_warned=report.checks_warned,
+                    checks_blocked=report.checks_blocked,
+                    total_processing_time_ms=report.total_processing_time_ms,
+                    pii_detected=report.pii_detected,
+                    hallucination_detected=report.hallucination_detected,
+                    bias_detected=report.bias_detected,
+                    compliance_violation=report.compliance_violation,
+                    block_reason=report.block_reason,
+                )
+                self._db_session.add(db_report)
+                self._db_session.commit()
+            except Exception as e:
+                print(f"Warning: Failed to persist guardrail report: {e}")
+
+        # Update Redis counters
+        self._update_redis_stats(report)
+
         return report
+
+    def _update_redis_stats(self, report: GuardrailReport):
+        """Update Redis counters for guardrail metrics."""
+        if not self._redis:
+            return
+
+        # Update action counters
+        action_key = "stats:guardrail:actions"
+        self._redis.hincrby(action_key, report.action.value, 1)
+
+        # Update detection counters
+        if report.pii_detected:
+            self._redis.hincrby("stats:guardrail:detections", "pii", 1)
+        if report.hallucination_detected:
+            self._redis.hincrby("stats:guardrail:detections", "hallucination", 1)
+        if report.bias_detected:
+            self._redis.hincrby("stats:guardrail:detections", "bias", 1)
+        if report.compliance_violation:
+            self._redis.hincrby("stats:guardrail:detections", "compliance", 1)
 
     def get_summary(self) -> dict:
         """Guardrail processing summary for the dashboard."""

@@ -184,19 +184,79 @@ class ComplianceLogger:
 
     Every method that writes a log entry returns it immediately.
     Nothing is buffered. Nothing is editable after write.
+
+    In-memory lists are maintained for the Python API, but all writes
+    are persisted to the database. Aggregate statistics are cached in Redis.
     """
 
-    def __init__(self, retention_days: int = 2555):  # ~7 years default
+    def __init__(self, retention_days: int = 2555, db_session=None):  # ~7 years default
         self._logs: list[InteractionLog] = []
         self._events: list[ComplianceEvent] = []
         self._retention_days = retention_days
         self._event_counter = 0
+        self._db_session = db_session  # Optional database session for persistence
+        self._redis = None
+
+        # Try to import database helpers
+        try:
+            from src.db import get_redis_client
+            self._redis = get_redis_client()
+        except (ImportError, Exception):
+            self._redis = None
 
     # -- Logging ------------------------------------------------------------
 
     def log_interaction(self, log: InteractionLog) -> InteractionLog:
         """Write an interaction log. Immutable after write."""
         self._logs.append(log)
+
+        # Persist to database if available
+        if self._db_session:
+            try:
+                from src.db import InteractionLogORM
+                db_log = InteractionLogORM(
+                    id=log.interaction_id,
+                    interaction_id=log.interaction_id,
+                    timestamp=log.timestamp,
+                    log_level=log.log_level.value,
+                    use_case=log.use_case,
+                    application_id=log.application_id,
+                    user_id=log.user_id,
+                    session_id=log.session_id,
+                    model_id=log.model_id,
+                    template_id=log.template_id,
+                    prompt_version=log.prompt_version,
+                    temperature=log.temperature,
+                    max_tokens=log.max_tokens,
+                    input_text_hash=log.input_text_hash,
+                    input_length=log.input_length,
+                    input_contains_pii=log.input_contains_pii,
+                    input_pii_types=log.input_pii_types,
+                    output_text_hash=log.output_text_hash,
+                    output_length=log.output_length,
+                    output_contains_pii=log.output_contains_pii,
+                    output_pii_types=log.output_pii_types,
+                    guardrail_action=log.guardrail_action,
+                    guardrail_checks=log.guardrail_checks,
+                    human_review_required=log.human_review_required,
+                    human_reviewer=log.human_reviewer,
+                    human_review_timestamp=log.human_review_timestamp,
+                    human_review_outcome=log.human_review_outcome.value if log.human_review_outcome else None,
+                    human_review_notes=log.human_review_notes,
+                    final_action=log.final_action,
+                    customer_visible=log.customer_visible,
+                    model_latency_ms=log.model_latency_ms,
+                    guardrail_latency_ms=log.guardrail_latency_ms,
+                    total_latency_ms=log.total_latency_ms,
+                    log_hash=log.log_hash,
+                )
+                self._db_session.add(db_log)
+                self._db_session.commit()
+            except Exception as e:
+                print(f"Warning: Failed to persist interaction log: {e}")
+
+        # Update Redis aggregate stats
+        self._update_redis_stats(log)
 
         # Auto-generate compliance events for notable interactions
         if log.guardrail_action in ("block", "alert"):
@@ -218,6 +278,31 @@ class ComplianceLogger:
 
         return log
 
+    def _update_redis_stats(self, log: InteractionLog):
+        """Update Redis aggregate statistics."""
+        if not self._redis:
+            return
+
+        # Update use case stats
+        uc_key = f"stats:usecase:{log.use_case}"
+        self._redis.hincrby(uc_key, "total", 1)
+        if log.final_action in ("delivered", "delivered_edited"):
+            self._redis.hincrby(uc_key, "delivered", 1)
+        elif log.final_action in ("blocked", "escalated"):
+            self._redis.hincrby(uc_key, "blocked", 1)
+
+        # Update model stats
+        if log.model_id:
+            model_key = f"stats:model:{log.model_id}"
+            self._redis.hincrby(model_key, "total", 1)
+
+        # Update guardrail check stats
+        for check in log.guardrail_checks:
+            check_name = check.get("check_name", "unknown")
+            result = check.get("result", "pass")
+            check_key = f"stats:guardrail:{check_name}"
+            self._redis.hincrby(check_key, result, 1)
+
     def _create_event(
         self, interaction_id: str, event_type: str,
         severity: LogLevel, description: str,
@@ -232,6 +317,25 @@ class ComplianceLogger:
             description=description,
         )
         self._events.append(event)
+
+        # Persist to database if available
+        if self._db_session:
+            try:
+                from src.db import ComplianceEventORM
+                db_event = ComplianceEventORM(
+                    id=event.event_id,
+                    event_id=event.event_id,
+                    interaction_id=event.interaction_id,
+                    timestamp=event.timestamp,
+                    event_type=event.event_type,
+                    severity=event.severity.value,
+                    description=event.description,
+                )
+                self._db_session.add(db_event)
+                self._db_session.commit()
+            except Exception as e:
+                print(f"Warning: Failed to persist compliance event: {e}")
+
         return event
 
     def resolve_event(

@@ -7,7 +7,7 @@ Exposes REST API for:
 - Governance checks (submit output through guardrail pipeline)
 """
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -23,6 +23,7 @@ from src.prompt_registry import PromptRegistry, UseCase, RiskTier, PromptStatus
 from src.output_guardrails import GuardrailEngine, GuardrailAction
 from src.compliance_logger import ComplianceLogger, InteractionLog, LogLevel
 from src.model_evaluator import ModelEvaluator
+from src.db import init_db, SessionLocal, Session
 
 # ============================================================================
 # PRODUCTION NOTES
@@ -128,7 +129,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize modules (in production, would use dependency injection)
+# Initialize database
+@app.on_event("startup")
+async def startup():
+    """Initialize database on startup."""
+    init_db()
+
+# Dependency for getting DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Initialize modules with dependency injection for database sessions
+# Note: Modules will use the session passed to them, with in-memory fallback
+def get_modules(db: Session = Depends(get_db)):
+    """Get initialized module instances with database session."""
+    return {
+        "prompt_registry": PromptRegistry(),
+        "guardrail_engine": GuardrailEngine(db_session=db),
+        "compliance_logger": ComplianceLogger(db_session=db),
+        "model_evaluator": ModelEvaluator(db_session=db),
+    }
+
+# Global instances for routes that don't use DB (backward compatible)
 prompt_registry = PromptRegistry()
 guardrail_engine = GuardrailEngine()
 compliance_logger = ComplianceLogger()
@@ -277,9 +303,11 @@ async def get_model_health():
 @app.get("/api/dashboard/events", response_model=List[ComplianceEventResponse], tags=["dashboard"])
 async def get_compliance_events(
     days: int = Query(30, ge=1, le=365),
-    unresolved_only: bool = False
+    unresolved_only: bool = False,
+    limit: int = Query(100, ge=1, le=10000),
+    offset: int = Query(0, ge=0)
 ):
-    """Get compliance events."""
+    """Get compliance events with pagination."""
     start_date = date.today()
     from datetime import timedelta
     start_date = start_date - timedelta(days=days)
@@ -288,6 +316,8 @@ async def get_compliance_events(
         start_date=start_date,
         unresolved_only=unresolved_only
     )
+
+    paginated_events = events[offset:offset + limit]
 
     return [
         ComplianceEventResponse(
@@ -300,7 +330,7 @@ async def get_compliance_events(
             status="resolved" if event.resolution else "open",
             resolution=event.resolution
         )
-        for event in events
+        for event in paginated_events
     ]
 
 
@@ -383,9 +413,10 @@ async def query_interactions(
     end_date: Optional[str] = None,
     use_case: Optional[str] = None,
     guardrail_action: Optional[str] = None,
-    limit: int = Query(100, ge=1, le=10000)
+    limit: int = Query(100, ge=1, le=10000),
+    offset: int = Query(0, ge=0)
 ):
-    """Query interaction logs."""
+    """Query interaction logs with pagination."""
     from datetime import datetime
     start = datetime.fromisoformat(start_date).date() if start_date else None
     end = datetime.fromisoformat(end_date).date() if end_date else None
@@ -397,9 +428,15 @@ async def query_interactions(
         guardrail_action=guardrail_action
     )
 
+    total_count = len(logs)
+    paginated_logs = logs[offset:offset + limit]
+
     return {
-        "total_count": len(logs),
-        "returned": min(len(logs), limit),
+        "total_count": total_count,
+        "offset": offset,
+        "limit": limit,
+        "returned": len(paginated_logs),
+        "has_more": (offset + limit) < total_count,
         "interactions": [
             {
                 "interaction_id": log.interaction_id,
@@ -410,7 +447,7 @@ async def query_interactions(
                 "pii_detected": log.output_contains_pii,
                 "customer_visible": log.customer_visible
             }
-            for log in logs[:limit]
+            for log in paginated_logs
         ]
     }
 
@@ -420,11 +457,21 @@ async def query_interactions(
 # ============================================================================
 
 @app.get("/api/prompts/templates", tags=["prompts"])
-async def list_prompt_templates():
-    """List all prompt templates."""
+async def list_prompt_templates(
+    limit: int = Query(100, ge=1, le=10000),
+    offset: int = Query(0, ge=0)
+):
+    """List all prompt templates with pagination."""
     templates = prompt_registry.list_templates()
+    total_count = len(templates)
+    paginated_templates = templates[offset:offset + limit]
+
     return {
-        "total": len(templates),
+        "total": total_count,
+        "offset": offset,
+        "limit": limit,
+        "returned": len(paginated_templates),
+        "has_more": (offset + limit) < total_count,
         "templates": [
             {
                 "id": t.id,
@@ -435,7 +482,7 @@ async def list_prompt_templates():
                 "total_versions": t.version_count,
                 "approval_rate": t.approval_rate
             }
-            for t in templates
+            for t in paginated_templates
         ]
     }
 

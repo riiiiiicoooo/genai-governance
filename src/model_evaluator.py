@@ -497,12 +497,13 @@ class BiasEvaluator:
 class ModelEvaluator:
     """Orchestrates evaluation runs and generates SR 11-7 documentation."""
 
-    def __init__(self):
+    def __init__(self, db_session=None):
         self._accuracy = AccuracyEvaluator()
         self._groundedness = GroundednessEvaluator()
         self._consistency = ConsistencyEvaluator()
         self._bias = BiasEvaluator()
         self._model_cards: dict[str, ModelCard] = {}
+        self._db_session = db_session
 
     def register_model(self, card: ModelCard) -> ModelCard:
         self._model_cards[card.model_id] = card
@@ -587,6 +588,62 @@ class ModelEvaluator:
             card.current_validation = run.validation_outcome
             card.last_validation_date = date.today()
             card.next_validation_date = date.today() + timedelta(days=90)
+
+        # Persist to database if available
+        if self._db_session:
+            try:
+                from src.db import EvaluationRunORM
+                db_run = EvaluationRunORM(
+                    id=run.id,
+                    suite_id=run.suite_id,
+                    model_id=run.model_id,
+                    prompt_version=run.prompt_version,
+                    started_at=run.started_at,
+                    completed_at=run.completed_at,
+                    status=run.status.value,
+                    test_results=[
+                        {
+                            "test_case_id": r.test_case_id,
+                            "dimension": r.dimension.value,
+                            "score": r.score,
+                            "passed": r.passed,
+                            "threshold": r.threshold,
+                            "output_text": r.output_text,
+                            "details": r.details,
+                            "processing_time_ms": r.processing_time_ms,
+                            "metadata": r.metadata,
+                        }
+                        for r in run.test_results
+                    ],
+                    bias_results=[
+                        {
+                            "dimension": b.dimension,
+                            "groups": b.groups,
+                            "baseline": b.baseline,
+                            "max_disparity_pct": b.max_disparity_pct,
+                            "threshold_pct": b.threshold_pct,
+                            "passed": b.passed,
+                            "flagged_groups": b.flagged_groups,
+                            "details": b.details,
+                        }
+                        for b in run.bias_results
+                    ],
+                    dimension_scores=run.dimension_scores,
+                    total_cases=run.total_cases,
+                    passed_cases=run.passed_cases,
+                    failed_cases=run.failed_cases,
+                    pass_rate_pct=run.pass_rate_pct,
+                    validation_outcome=run.validation_outcome.value if run.validation_outcome else None,
+                    validation_notes=run.validation_notes,
+                    conditions=run.conditions,
+                    baseline_run_id=run.baseline_run_id,
+                    regression_detected=run.regression_detected,
+                    regression_details=run.regression_details,
+                )
+                self._db_session.add(db_run)
+                self._db_session.commit()
+            except Exception as e:
+                print(f"Warning: Failed to persist evaluation run: {e}")
 
         return run
 
