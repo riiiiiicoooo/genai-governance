@@ -348,6 +348,178 @@ Compliance officer shows:
 
 ---
 
+## Cost Architecture & Token Efficiency
+
+**Principle:** Optimize non-critical paths aggressively, never compromise compliance paths.
+
+In GenAI deployments, cost and compliance can seem at odds. Full guardrail pipelines protect against risk but add latency and expense. This section explains how the platform separates cost-critical from compliance-critical work, optimizing token spend while maintaining regulatory rigor.
+
+### Token Budget Management
+
+Every prompt template has a token budget (typical 1500-2500 tokens rendered). When rendering exceeds the budget, the system flags for compression without sacrificing compliance content.
+
+```python
+# Example: FAQ routing prompt
+prompt_token_budget = 2000
+rendered_prompt = registry.render("faq_router_v1", {"member_question": "..."})
+needs_compression, suggestion, metrics = cost_optimizer.optimize_prompt(
+    template_id="faq_router_v1",
+    rendered_prompt=rendered_prompt,
+    risk_level=RiskLevel.LOW,  # FAQ is low-risk
+    compression_threshold_tokens=2000
+)
+
+# If rendered prompt is 2,847 tokens:
+# suggestion = "Prompt exceeds 2000 tokens (2847 actual). Consider: (1) Reduce few-shot
+#              examples from 5 to 2. (2) Shorten verbose instructions. Potential savings:
+#              $0.0058 per 10K interactions."
+```
+
+**Compression strategy:** Reduce non-compliance scaffolding
+- Few-shot examples: 5→2 (still covers cases, saves tokens)
+- Verbose instructions: paraphrase for clarity+brevity
+- Redundant context: consolidate repeated disclaimers
+
+**Never compress:**
+- Risk disclaimers (regulatory requirement)
+- PII handling instructions (compliance requirement)
+- Guardrail specifications (product requirement)
+
+### Tiered Guardrail Execution by Risk Level
+
+Guardrail cost is proportional to pipeline depth. Presidio NLP scanning is expensive; pattern matching is cheap. The platform ties guardrail tier to risk:
+
+| Risk Level | Guardrail Tier | Checks Enabled | Cost per Call | Use Cases |
+|-----------|---|---|---|---|
+| **LOW** | LITE | Regex patterns only (no NLP) | $0.00001 | FAQ routing, simple classification, internal tools |
+| **MEDIUM** | STANDARD | Regex + pattern libraries + selective Presidio | $0.0005 | Customer-facing informational responses, document summaries |
+| **HIGH** | FULL | Regex + Presidio NLP + all statistical checks | $0.0015 | Financial advice, account actions, loan decisions, decision-influencing |
+
+**Example cost impact (1,000 daily interactions, 500 tokens input, 200 output, Haiku):**
+
+```
+LOW RISK (FAQ, no NLP):
+  LLM cost:      $0.08/day × 30 = $2.40/month
+  Guardrail:     $0.00001 × 30K = $0.30/month
+  Total:         ~$2.70/month
+
+MEDIUM RISK (Informational):
+  LLM cost:      $0.08/day × 30 = $2.40/month
+  Guardrail:     $0.0005 × 30K = $15.00/month
+  Total:         ~$17.40/month
+
+HIGH RISK (Financial):
+  LLM cost:      $0.08/day × 30 = $2.40/month
+  Guardrail:     $0.0015 × 30K = $45.00/month
+  Total:         ~$47.40/month
+```
+
+**Design decision:** Skip Presidio NLP for low-risk uses. Presidio's value is context-aware PII detection (catches "Account 123-45-6789" in financial context). FAQ routing doesn't access PII; simple regex suffices.
+
+### Model Selection Strategy
+
+For each use case, the platform recommends the cheapest model that meets quality thresholds. This requires understanding quality deltas across models.
+
+**Cost-effectiveness by use case:**
+
+| Use Case | Recommended | Alternative | Quality Delta | Monthly Savings (10K daily) |
+|----------|---|---|---|---|
+| **FAQ Routing** (exact match classification) | Haiku ($0.25/$1.25/1M) | Sonnet ($3/$15/1M) | <1% accuracy loss | ~$180 |
+| **Summarization** (extract + paraphrase) | Haiku or Mini ($0.15/$0.60/1M) | Sonnet | 5-8% quality loss | ~$150-200 |
+| **Member Service** (nuanced advice) | Sonnet ($3/$15/1M) | Opus ($15/$75/1M) | 2-3% quality loss | ~$300 |
+| **Complex Reasoning** (multi-step logic) | Opus ($15/$75/1M) | — | — | — |
+
+**Example recommendation (Member Service use case):**
+
+```
+Use case: FAQ routing
+Throughput: 1,000/day
+Input: 300 tokens (member question)
+Output: 150 tokens (routed category + brief explanation)
+
+Current deployment: Sonnet
+  Cost = (1000 * 30 * 300 * $3 + 1000 * 30 * 150 * $15) / 1M = $63/month
+
+Downgrade candidate: Haiku
+  Cost = (1000 * 30 * 300 * $0.25 + 1000 * 30 * 150 * $1.25) / 1M = $5.25/month
+  Savings: $57.75/month
+
+Quality analysis: FAQ routing is deterministic classification (does member question
+                 match category "account_balance", "fee_dispute", etc?). Haiku achieves
+                 96% accuracy vs Sonnet's 97%. Risk: 1% of 1000 daily = 10 misroutings/day.
+
+Recommendation: DOWNGRADE to Haiku. 1% quality loss is acceptable for 92% cost savings.
+                Establish SLA: <5% misrouting rate. Monitor weekly.
+```
+
+### Monthly Cost Projection Framework
+
+The platform projects monthly spend across all deployments to guide optimization priorities:
+
+```python
+projection = cost_optimizer.estimate_monthly_cost(
+    daily_interactions=1000,
+    avg_input_tokens=400,
+    avg_output_tokens=200,
+    model=ModelTier.SONNET,
+    risk_level=RiskLevel.MEDIUM,
+)
+
+# Returns:
+# {
+#   "model": "sonnet",
+#   "guardrail_tier": "standard",
+#   "monthly_input_cost": $36.00,
+#   "monthly_output_cost": $18.00,
+#   "monthly_guardrail_cost": $15.00,
+#   "total_monthly_cost": $69.00,
+#   "cost_per_interaction": $0.0023
+# }
+```
+
+Dashboard aggregates across all templates:
+
+```
+COST DASHBOARD
+───────────────────────────────────────
+Per-Template Breakdown:
+  faq_routing (Haiku, LITE):           $2.70/month
+  member_service (Sonnet, STANDARD):   $69.00/month
+  loan_summarizer (Sonnet, STANDARD):  $45.00/month
+  document_extraction (Haiku, LITE):   $3.50/month
+
+Per-Model Breakdown:
+  Haiku (low-risk):    $6.20/month (9% of total)
+  Sonnet (standard):   $114.00/month (91% of total)
+
+Optimization Opportunities:
+  • FAQ routing: Consider downgrade to Haiku (quality delta <1%) → $57.75/month savings
+  • Member service: Evaluate MEDIUM→LOW risk reclassification → $30/month guardrail savings
+
+Monthly Total: $120.20
+```
+
+### Compliance-Cost Tradeoff Decisions
+
+**Question:** Can we skip PII detection for low-risk use cases to save cost?
+
+**Answer:** No. PII detection is part of SR 11-7 compliance. Even in low-risk uses, we run pattern matching (cheap). Presidio NLP (expensive) is skipped only when use case has zero PII access.
+
+**Question:** Can we use a cheaper model and accept slightly lower accuracy?
+
+**Answer:** Yes, if quality loss is understood and acceptable. Example: FAQ routing 96% vs 97% accuracy (1% misrouting). This is documented and monitored. Not acceptable: financial advice with quality loss (regulatory exposure).
+
+**Question:** How do we balance cost savings with latency?
+
+**Answer:** Model choice is primary lever:
+- Haiku: 800ms latency, $0.25/$1.25 per 1M tokens
+- Sonnet: 300ms latency, $3/$15 per 1M tokens
+- Opus: 600ms latency, $15/$75 per 1M tokens
+
+If member-facing latency SLA is <2s, Haiku is acceptable (800ms LLM + 200ms guardrails = 1000ms total). If SLA is <500ms, must use Sonnet despite cost.
+
+---
+
 ## Deployment Topology
 
 ### Development Environment
